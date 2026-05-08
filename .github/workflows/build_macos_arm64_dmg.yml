@@ -1,0 +1,73 @@
+name: Build macOS arm64 DMG
+
+on:
+  workflow_dispatch:
+    inputs:
+      git_ref:
+        description: "Git ref to build (branch, tag, or SHA). Leave empty to build current ref."
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CHANNEL: oss
+
+jobs:
+  build_macos_arm64_dmg:
+    name: Build OpenWarp DMG (arm64)
+    runs-on: macos-26
+    timeout-minutes: 180
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.git_ref != '' && inputs.git_ref || github.ref }}
+
+      - name: Prepare environment
+        uses: ./.github/actions/prepare_environment
+        with:
+          target_os: macos
+          is_self_hosted: false
+          install_release_deps: true
+
+      - name: Ensure rust target is installed
+        shell: bash
+        run: rustup target add aarch64-apple-darwin
+
+      - name: Setup Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        with:
+          go-version: stable
+
+      - name: Install cargo-bundle
+        shell: bash
+        run: script/install_cargo_bundle
+
+      - name: Install create-dmg
+        shell: bash
+        run: brew install create-dmg
+
+      - name: Build unsigned DMG
+        id: bundle_app
+        shell: bash
+        run: script/bundle --channel "$CHANNEL" --arch aarch64 --dmg-name-suffix arm64
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: openwarp-macos-arm64-dmg
+          path: ${{ steps.bundle_app.outputs.dmg_path }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Print desktop run instructions
+        shell: bash
+        run: |
+          echo "DMG artifact name: openwarp-macos-arm64-dmg"
+          echo "After download on macOS:"
+          echo "1) Double-click the DMG."
+          echo "2) Drag OpenWarp.app into /Applications."
+          echo "3) Run with: open /Applications/OpenWarp.app"
