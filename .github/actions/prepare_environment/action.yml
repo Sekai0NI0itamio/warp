@@ -15,6 +15,10 @@ inputs:
     description: If true, dependencies needed for building release artifacts will be installed (e.g., cargo-about for license generation).
   cache_key:
     description: If set, the cache key to use.  If unset, the cache key will be derived from the target OS.
+  cache_save_if:
+    description: If set, controls whether Rust cache is saved (expects true/false expression result).
+  cache_workspace_crates:
+    description: If true, include workspace crates in Rust cache for faster repeated full builds.
   ssh_key:
     description: SSH private key used to clone the private warp-channel-config repository. Only consumed when running in warpdotdev/warp-internal.
 
@@ -59,9 +63,9 @@ runs:
         # Make sure x86_64-unknown-linux-gnu and wasm32-unknown-unknown builds
         # don't share a cache, despite running on the same _host_ architecture.
         key: ${{ inputs.cache_key != '' && inputs.cache_key || inputs.target_os }}
-        # Only cache runs on the master branch (caches on feature branches
-        # are not reusable).
-        save-if: ${{ github.ref == 'refs/heads/master' }}
+        # By default cache runs on the default branch; callers can override.
+        save-if: ${{ inputs.cache_save_if != '' && inputs.cache_save_if || github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+        cache-workspace-crates: ${{ inputs.cache_workspace_crates == 'true' }}
 
     - name: Set up Namespace cache
       if: ${{ startsWith(runner.name, 'nsc-runner') }}
