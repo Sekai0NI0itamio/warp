@@ -1667,6 +1667,7 @@ fn normalize_endpoint_url(api_type: AgentProviderApiType, base_url: &str) -> Str
 pub(super) fn is_deepseek_official_endpoint(base_url: &str) -> bool {
     let endpoint = normalize_endpoint_url(AgentProviderApiType::DeepSeek, base_url);
     let Ok(parsed) = url::Url::parse(&endpoint) else {
+        log::warn!("[byop] invalid DeepSeek endpoint URL: {endpoint}");
         return false;
     };
     if parsed.scheme() != "https" {
