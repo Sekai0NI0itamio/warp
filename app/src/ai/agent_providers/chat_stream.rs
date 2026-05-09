@@ -1934,7 +1934,7 @@ pub async fn generate_byop_output(
         && !is_deepseek_official_endpoint(&base_url)
     {
         return Err(ConvertToAPITypeError::Other(anyhow::anyhow!(
-            "DeepSeek API key will only be sent to https://api.deepseek.com"
+            "Security restriction: DeepSeek API keys can only be sent to the official endpoint https://api.deepseek.com"
         )));
     }
     let force_echo_reasoning = super::reasoning::model_requires_reasoning_echo(api_type, &model_id);

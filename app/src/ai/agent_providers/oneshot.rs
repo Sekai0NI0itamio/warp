@@ -79,7 +79,9 @@ pub async fn byop_oneshot_completion(
     if matches!(cfg.api_type, AgentProviderApiType::DeepSeek)
         && !chat_stream::is_deepseek_official_endpoint(&cfg.base_url)
     {
-        bail!("DeepSeek API key will only be sent to https://api.deepseek.com");
+        bail!(
+            "Security restriction: DeepSeek API keys can only be sent to the official endpoint https://api.deepseek.com"
+        );
     }
     let client = chat_stream::build_client(cfg.api_type, cfg.base_url.clone(), cfg.api_key.clone());
 
