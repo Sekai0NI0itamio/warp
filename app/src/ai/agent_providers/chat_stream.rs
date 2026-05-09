@@ -65,6 +65,10 @@ use ai::agent::convert::ConvertToAPITypeError;
 use super::openai_compatible::OpenAiCompatibleError;
 use super::tools;
 
+const DEEPSEEK_OFFICIAL_HOST: &str = "api.deepseek.com";
+pub(super) const DEEPSEEK_SECURITY_RESTRICTION_MSG: &str =
+    "Security restriction: DeepSeek API keys can only be sent to the official endpoint https://api.deepseek.com. Please verify your provider base_url in Settings > AI > Providers.";
+
 // ---------------------------------------------------------------------------
 // System prompt
 // ---------------------------------------------------------------------------
@@ -1660,6 +1664,23 @@ fn normalize_endpoint_url(api_type: AgentProviderApiType, base_url: &str) -> Str
     format!("{stripped}/")
 }
 
+pub(super) fn is_deepseek_official_endpoint(base_url: &str) -> bool {
+    let endpoint = normalize_endpoint_url(AgentProviderApiType::DeepSeek, base_url);
+    let Ok(parsed) = url::Url::parse(&endpoint) else {
+        log::warn!("[byop] invalid DeepSeek endpoint URL configured");
+        return false;
+    };
+    if parsed.scheme() != "https" {
+        return false;
+    }
+    let Some(host) = parsed.host_str() else {
+        return false;
+    };
+    // 安全策略:仅允许官方固定主机,避免把 DeepSeek key 发送到任意自定义/子域网关。
+    // 这里显式拒绝任何 wildcard/子域匹配(包括 *.api.deepseek.com)。
+    matches!(host, DEEPSEEK_OFFICIAL_HOST)
+}
+
 /// 构造 genai Client。每次请求新建(开销低 — Client 内部只是 reqwest::Client + adapter 表)。
 /// `ServiceTargetResolver` capture 当前请求的 endpoint/key/api_type 后,把每次 exec_chat_stream
 /// 都强制路由到指定 AdapterKind,完全绕过 genai 默认的"按模型名识别"。
@@ -1771,8 +1792,10 @@ fn build_chat_options(
     //   - prompt_cache_key:OpenAI 把同 key 的请求路由到同一缓存分片,提升命中
     //     (`prompt_cache_key` field,见 `adapter_shared.rs:194` /
     //     `openai_resp/adapter_impl.rs:238`);用 conversation_id 作为稳定 key。
-    //   - cache_control = Ephemeral → 序列化为 `prompt_cache_retention: "in_memory"`
-    //     (genai `adapter_shared.rs:199`),触发服务端短 TTL 缓存。
+    //   - OpenAI/OpenAIResp 继续使用 `cache_control = Ephemeral`(in_memory),
+    //     对齐现有 OpenAI 兼容链路的短时缓存语义。
+    //   - DeepSeek 不再强制 `cache_control`，保留服务端默认持久化缓存(磁盘/较长 TTL)路径，
+    //     避免被 `in_memory` 策略降级导致缓存命中率下降。
     // Anthropic 走 per-message cache_control(在 build_chat_request 里),不在此处。
     // Gemini / Ollama 服务端隐式缓存,跳过。
     if matches!(
@@ -1786,7 +1809,12 @@ fn build_chat_options(
                 opts = opts.with_prompt_cache_key(cid.to_owned());
             }
         }
-        opts = opts.with_cache_control(CacheControl::Ephemeral);
+        if matches!(
+            api_type,
+            AgentProviderApiType::OpenAi | AgentProviderApiType::OpenAiResp
+        ) {
+            opts = opts.with_cache_control(CacheControl::Ephemeral);
+        }
     }
 
     // 仅在用户显式选了非 Auto 档位 **且** 模型支持 reasoning 时才注入。
@@ -1911,6 +1939,13 @@ pub async fn generate_byop_output(
     context_window: Option<u32>,
     _cancellation_rx: futures::channel::oneshot::Receiver<()>,
 ) -> Result<ResponseStream, ConvertToAPITypeError> {
+    if matches!(api_type, AgentProviderApiType::DeepSeek)
+        && !is_deepseek_official_endpoint(&base_url)
+    {
+        return Err(ConvertToAPITypeError::Other(anyhow::anyhow!(
+            DEEPSEEK_SECURITY_RESTRICTION_MSG
+        )));
+    }
     let force_echo_reasoning = super::reasoning::model_requires_reasoning_echo(api_type, &model_id);
     let chat_req = build_chat_request(&params, force_echo_reasoning, api_type, &model_id);
     let conversation_id = params
@@ -2007,70 +2042,6 @@ pub async fn generate_byop_output(
         log::info!(
             "[byop]  [{idx}] role={role} text_len={text_len} tool_calls={tc_count} tool_responses={tr_count}"
         );
-    }
-
-    // 诊断:构造包含 system / messages / tools 的完整 ChatRequest JSON dump,保存到
-    // stream 闭包。真实 Anthropic wire body 会由 genai adapter 再转换一层,但这里已经
-    // 覆盖所有传入 BYOP 的原始字符串,足够定位非法 escape 来自 prompt、工具描述、
-    // schema 还是 tool result。
-    let diag_body_json = serde_json::to_string(&json!({
-        "model": &model_id,
-        "chat_request": &chat_req,
-    }))
-    .unwrap_or_default();
-    log::info!("[byop] diag_body_approx_len={}", diag_body_json.len());
-    log::info!("[byop-diag] full_request_json={diag_body_json}");
-
-    // 主动扫描原始文本里的"可疑反斜杠序列":serde_json 把源字符串里的字面
-    // `\` 序列化为 `\\`,所以 wire body 里出现"两个连续反斜杠 + u/x" 才意味着
-    // 原文有字面 `\u` / `\x`,这是 proxy 误"还原 `\\u` → `\u`"触发 invalid escape
-    // 的真实风险点。源字符串里的 `\n` / `\r` / `\t` 经 serde_json 输出为单个反斜杠 +
-    // 字母,本身就是合法 JSON escape,proxy 不会再二次还原,不算可疑。
-    fn scan_suspicious_backslash(label: &str, s: &str) {
-        let bytes = s.as_bytes();
-        let mut bs_hits: Vec<(usize, String)> = Vec::new();
-        let mut ctrl_hits: Vec<(usize, u8)> = Vec::new();
-        let mut i = 0;
-        while i < bytes.len() {
-            let b = bytes[i];
-            // 字面 `\\u` / `\\x` 序列(源字符串中含 `\u` / `\x`)。
-            if b == b'\\'
-                && i + 2 < bytes.len()
-                && bytes[i + 1] == b'\\'
-                && matches!(bytes[i + 2], b'u' | b'x')
-            {
-                let end = (i + 10).min(bytes.len());
-                let snippet = String::from_utf8_lossy(&bytes[i..end]).to_string();
-                if bs_hits.len() < 5 {
-                    bs_hits.push((i, snippet));
-                }
-                // 跳过这一对,避免对同一位置触发多次。
-                i += 3;
-                continue;
-            }
-            // raw 控制字符(byte 0x00-0x08, 0x0B-0x0C, 0x0E-0x1F)。
-            // serde_json 会 escape 为 `\u00XX`,合法 JSON;但部分 strict proxy
-            // 或经过 base64 / 中间编码层时这些字节最容易出错。
-            if (b < 0x20 && !matches!(b, b'\t' | b'\n' | b'\r')) && ctrl_hits.len() < 10 {
-                ctrl_hits.push((i, b));
-            }
-            i += 1;
-        }
-        if !bs_hits.is_empty() {
-            log::warn!("[byop] {label} suspicious literal '\\\\u'/'\\\\x' patterns: {bs_hits:?}");
-        }
-        if !ctrl_hits.is_empty() {
-            log::warn!("[byop] {label} contains raw control chars (offset, byte): {ctrl_hits:?}");
-        }
-    }
-    scan_suspicious_backslash("full_request_json", &diag_body_json);
-    if let Some(sys) = chat_req.system.as_deref() {
-        scan_suspicious_backslash("system", sys);
-    }
-    for (idx, m) in chat_req.messages.iter().enumerate() {
-        if let Some(t) = m.content.first_text() {
-            scan_suspicious_backslash(&format!("msg[{idx}]"), t);
-        }
     }
 
     let stream = async_stream::stream! {
@@ -2276,27 +2247,6 @@ pub async fn generate_byop_output(
                     let mapped = map_genai_error(e);
                     let err_text = format!("{mapped:#}");
                     log::error!("[byop] stream chunk error: {err_text}");
-                    log::error!("[byop-diag] full_request_json_on_error={diag_body_json}");
-                    // 从错误消息里 parse "column N",dump diag_body_json 该位置 ±200 char 上下文 + 字节 hex。
-                    if let Some(col) = err_text
-                        .split("column ")
-                        .nth(1)
-                        .and_then(|s| s.chars().take_while(|c| c.is_ascii_digit()).collect::<String>().parse::<usize>().ok())
-                    {
-                        let body = &diag_body_json;
-                        let byte_len = body.len();
-                        let start = col.saturating_sub(200).min(byte_len);
-                        let end = (col + 200).min(byte_len);
-                        let context = body.get(start..end).unwrap_or("(slice failed: 非 char 边界)");
-                        log::error!(
-                            "[byop] error column={col} diag_body_len={byte_len} context[{start}..{end}]={context:?}"
-                        );
-                        let hex_start = col.saturating_sub(20).min(byte_len);
-                        let hex_end = (col + 20).min(byte_len);
-                        if let Some(slice) = body.as_bytes().get(hex_start..hex_end) {
-                            log::error!("[byop] error bytes[{hex_start}..{hex_end}] hex={slice:02x?}");
-                        }
-                    }
                     yield Err(Arc::new(AIApiError::Other(anyhow::anyhow!(
                         "BYOP stream error: {mapped}"
                     ))));
@@ -3726,10 +3676,7 @@ mod chat_options_cache_tests {
             Some("conv-123"),
         );
         assert_eq!(opts.prompt_cache_key(), Some("conv-123"));
-        assert!(matches!(
-            opts.cache_control(),
-            Some(&CacheControl::Ephemeral)
-        ));
+        assert_eq!(opts.cache_control(), None);
     }
 
     #[test]
@@ -3743,9 +3690,33 @@ mod chat_options_cache_tests {
             None,
         );
         assert_eq!(opts.prompt_cache_key(), None);
-        assert!(matches!(
-            opts.cache_control(),
-            Some(&CacheControl::Ephemeral)
+        assert_eq!(opts.cache_control(), None);
+    }
+}
+
+#[cfg(test)]
+mod deepseek_endpoint_tests {
+    use super::is_deepseek_official_endpoint;
+
+    #[test]
+    fn deepseek_official_host_allowed() {
+        assert!(is_deepseek_official_endpoint("https://api.deepseek.com/v1/"));
+    }
+
+    #[test]
+    fn deepseek_subdomain_rejected() {
+        assert!(!is_deepseek_official_endpoint(
+            "https://gateway.deepseek.com/v1/"
         ));
+    }
+
+    #[test]
+    fn deepseek_non_https_rejected() {
+        assert!(!is_deepseek_official_endpoint("http://api.deepseek.com/v1/"));
+    }
+
+    #[test]
+    fn deepseek_non_official_host_rejected() {
+        assert!(!is_deepseek_official_endpoint("https://example.com/v1/"));
     }
 }
