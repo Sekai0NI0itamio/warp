@@ -868,10 +868,9 @@ fn build_chat_request(
     //   OpenAI 系的 `prompt_cache_key` / `cache_control` 在 `build_chat_options`
     //   里设置(请求级别),也来自 opencode 同一组规则的下游 fallback。
     let messages = if matches!(api_type, AgentProviderApiType::Anthropic) {
-        let mut msgs: Vec<ChatMessage> =
-            std::iter::once(ChatMessage::system(system_text.clone()))
-                .chain(messages.into_iter())
-                .collect();
+        let mut msgs: Vec<ChatMessage> = std::iter::once(ChatMessage::system(system_text.clone()))
+            .chain(messages.into_iter())
+            .collect();
         apply_caching_anthropic(&mut msgs);
         msgs
     } else {
