@@ -65,6 +65,10 @@ use ai::agent::convert::ConvertToAPITypeError;
 use super::openai_compatible::OpenAiCompatibleError;
 use super::tools;
 
+const DEEPSEEK_OFFICIAL_HOST: &str = "api.deepseek.com";
+pub(super) const DEEPSEEK_SECURITY_RESTRICTION_MSG: &str =
+    "Security restriction: DeepSeek API keys can only be sent to the official endpoint https://api.deepseek.com. Please verify your provider base_url in Settings > AI > Providers.";
+
 // ---------------------------------------------------------------------------
 // System prompt
 // ---------------------------------------------------------------------------
@@ -1672,7 +1676,7 @@ pub(super) fn is_deepseek_official_endpoint(base_url: &str) -> bool {
         return false;
     };
     // 安全策略:仅允许官方固定主机,避免把 DeepSeek key 发送到任意自定义/子域网关。
-    matches!(host, "api.deepseek.com")
+    matches!(host, DEEPSEEK_OFFICIAL_HOST)
 }
 
 /// 构造 genai Client。每次请求新建(开销低 — Client 内部只是 reqwest::Client + adapter 表)。
@@ -1936,7 +1940,7 @@ pub async fn generate_byop_output(
         && !is_deepseek_official_endpoint(&base_url)
     {
         return Err(ConvertToAPITypeError::Other(anyhow::anyhow!(
-            "Security restriction: DeepSeek API keys can only be sent to the official endpoint https://api.deepseek.com"
+            DEEPSEEK_SECURITY_RESTRICTION_MSG
         )));
     }
     let force_echo_reasoning = super::reasoning::model_requires_reasoning_echo(api_type, &model_id);
