@@ -1671,6 +1671,7 @@ pub(super) fn is_deepseek_official_endpoint(base_url: &str) -> bool {
     let Some(host) = parsed.host_str() else {
         return false;
     };
+    // 安全策略:仅允许官方固定主机,避免把 DeepSeek key 发送到任意自定义/子域网关。
     matches!(host, "api.deepseek.com")
 }
 
@@ -1786,7 +1787,8 @@ fn build_chat_options(
     //     (`prompt_cache_key` field,见 `adapter_shared.rs:194` /
     //     `openai_resp/adapter_impl.rs:238`);用 conversation_id 作为稳定 key。
     //   - OpenAI/OpenAIResp 继续使用 `cache_control = Ephemeral`(in_memory)。
-    //   - DeepSeek 不再强制 `cache_control`，避免把服务端默认磁盘缓存降级成短 TTL。
+    //   - DeepSeek 不再强制 `cache_control`，保留服务端默认持久化缓存(磁盘/较长 TTL)路径，
+    //     避免被 `in_memory` 策略降级导致缓存命中率下降。
     // Anthropic 走 per-message cache_control(在 build_chat_request 里),不在此处。
     // Gemini / Ollama 服务端隐式缓存,跳过。
     if matches!(
