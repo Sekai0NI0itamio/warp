@@ -1,4 +1,4 @@
-name: Build macOS arm64 DMG
+name: Build macOS arm64 artifact
 
 on:
   workflow_dispatch:
@@ -12,6 +12,14 @@ on:
         required: false
         default: false
         type: boolean
+      artifact_type:
+        description: "Artifact type to build."
+        required: false
+        default: app
+        type: choice
+        options:
+          - app
+          - dmg
 
 permissions:
   contents: read
@@ -21,8 +29,8 @@ env:
   CHANNEL: oss
 
 jobs:
-  build_macos_arm64_dmg:
-    name: Build OpenWarp DMG (arm64)
+  build_macos_arm64_artifact:
+    name: Build OpenWarp ${{ inputs.artifact_type }} (arm64)
     runs-on: macos-26
     timeout-minutes: 180
     steps:
@@ -54,10 +62,11 @@ jobs:
         run: script/install_cargo_bundle
 
       - name: Install create-dmg
+        if: ${{ inputs.artifact_type == 'dmg' }}
         shell: bash
         run: brew install create-dmg
 
-      - name: Build unsigned DMG
+      - name: Build unsigned artifact
         id: bundle_app
         shell: bash
         run: |
@@ -66,9 +75,22 @@ jobs:
             echo "Fast build enabled: using --debug profile for quicker compile."
             EXTRA_ARGS+=(--debug)
           fi
+          if [[ "${{ inputs.artifact_type }}" == "app" ]]; then
+            EXTRA_ARGS+=(--skip-dmg)
+          fi
           script/bundle --channel "$CHANNEL" --arch aarch64 --dmg-name-suffix arm64 "${EXTRA_ARGS[@]}"
 
+      - name: Upload app artifact
+        if: ${{ inputs.artifact_type == 'app' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: openwarp-macos-arm64-app
+          path: ${{ steps.bundle_app.outputs.app_path }}
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Upload DMG artifact
+        if: ${{ inputs.artifact_type == 'dmg' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: openwarp-macos-arm64-dmg
@@ -76,7 +98,18 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Print desktop run instructions
+      - name: Print app run instructions
+        if: ${{ inputs.artifact_type == 'app' }}
+        shell: bash
+        run: |
+          echo "App artifact name: openwarp-macos-arm64-app"
+          echo "After download on macOS:"
+          echo "1) Unzip artifact if needed."
+          echo "2) Move OpenWarp.app into /Applications (optional)."
+          echo "3) Run with: open /Applications/OpenWarp.app"
+
+      - name: Print DMG run instructions
+        if: ${{ inputs.artifact_type == 'dmg' }}
         shell: bash
         run: |
           echo "DMG artifact name: openwarp-macos-arm64-dmg"
