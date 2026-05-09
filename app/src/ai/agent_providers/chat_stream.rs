@@ -2042,70 +2042,6 @@ pub async fn generate_byop_output(
         );
     }
 
-    // 诊断:构造包含 system / messages / tools 的完整 ChatRequest JSON dump,保存到
-    // stream 闭包。真实 Anthropic wire body 会由 genai adapter 再转换一层,但这里已经
-    // 覆盖所有传入 BYOP 的原始字符串,足够定位非法 escape 来自 prompt、工具描述、
-    // schema 还是 tool result。
-    let diag_body_json = serde_json::to_string(&json!({
-        "model": &model_id,
-        "chat_request": &chat_req,
-    }))
-    .unwrap_or_default();
-    log::info!("[byop] diag_body_approx_len={}", diag_body_json.len());
-    log::info!("[byop-diag] full_request_json={diag_body_json}");
-
-    // 主动扫描原始文本里的"可疑反斜杠序列":serde_json 把源字符串里的字面
-    // `\` 序列化为 `\\`,所以 wire body 里出现"两个连续反斜杠 + u/x" 才意味着
-    // 原文有字面 `\u` / `\x`,这是 proxy 误"还原 `\\u` → `\u`"触发 invalid escape
-    // 的真实风险点。源字符串里的 `\n` / `\r` / `\t` 经 serde_json 输出为单个反斜杠 +
-    // 字母,本身就是合法 JSON escape,proxy 不会再二次还原,不算可疑。
-    fn scan_suspicious_backslash(label: &str, s: &str) {
-        let bytes = s.as_bytes();
-        let mut bs_hits: Vec<(usize, String)> = Vec::new();
-        let mut ctrl_hits: Vec<(usize, u8)> = Vec::new();
-        let mut i = 0;
-        while i < bytes.len() {
-            let b = bytes[i];
-            // 字面 `\\u` / `\\x` 序列(源字符串中含 `\u` / `\x`)。
-            if b == b'\\'
-                && i + 2 < bytes.len()
-                && bytes[i + 1] == b'\\'
-                && matches!(bytes[i + 2], b'u' | b'x')
-            {
-                let end = (i + 10).min(bytes.len());
-                let snippet = String::from_utf8_lossy(&bytes[i..end]).to_string();
-                if bs_hits.len() < 5 {
-                    bs_hits.push((i, snippet));
-                }
-                // 跳过这一对,避免对同一位置触发多次。
-                i += 3;
-                continue;
-            }
-            // raw 控制字符(byte 0x00-0x08, 0x0B-0x0C, 0x0E-0x1F)。
-            // serde_json 会 escape 为 `\u00XX`,合法 JSON;但部分 strict proxy
-            // 或经过 base64 / 中间编码层时这些字节最容易出错。
-            if (b < 0x20 && !matches!(b, b'\t' | b'\n' | b'\r')) && ctrl_hits.len() < 10 {
-                ctrl_hits.push((i, b));
-            }
-            i += 1;
-        }
-        if !bs_hits.is_empty() {
-            log::warn!("[byop] {label} suspicious literal '\\\\u'/'\\\\x' patterns: {bs_hits:?}");
-        }
-        if !ctrl_hits.is_empty() {
-            log::warn!("[byop] {label} contains raw control chars (offset, byte): {ctrl_hits:?}");
-        }
-    }
-    scan_suspicious_backslash("full_request_json", &diag_body_json);
-    if let Some(sys) = chat_req.system.as_deref() {
-        scan_suspicious_backslash("system", sys);
-    }
-    for (idx, m) in chat_req.messages.iter().enumerate() {
-        if let Some(t) = m.content.first_text() {
-            scan_suspicious_backslash(&format!("msg[{idx}]"), t);
-        }
-    }
-
     let stream = async_stream::stream! {
         // 1) StreamInit — 始终先发,UI 能立刻显示 "thinking..."
         yield Ok(api::ResponseEvent {
@@ -2309,27 +2245,6 @@ pub async fn generate_byop_output(
                     let mapped = map_genai_error(e);
                     let err_text = format!("{mapped:#}");
                     log::error!("[byop] stream chunk error: {err_text}");
-                    log::error!("[byop-diag] full_request_json_on_error={diag_body_json}");
-                    // 从错误消息里 parse "column N",dump diag_body_json 该位置 ±200 char 上下文 + 字节 hex。
-                    if let Some(col) = err_text
-                        .split("column ")
-                        .nth(1)
-                        .and_then(|s| s.chars().take_while(|c| c.is_ascii_digit()).collect::<String>().parse::<usize>().ok())
-                    {
-                        let body = &diag_body_json;
-                        let byte_len = body.len();
-                        let start = col.saturating_sub(200).min(byte_len);
-                        let end = (col + 200).min(byte_len);
-                        let context = body.get(start..end).unwrap_or("(slice failed: 非 char 边界)");
-                        log::error!(
-                            "[byop] error column={col} diag_body_len={byte_len} context[{start}..{end}]={context:?}"
-                        );
-                        let hex_start = col.saturating_sub(20).min(byte_len);
-                        let hex_end = (col + 20).min(byte_len);
-                        if let Some(slice) = body.as_bytes().get(hex_start..hex_end) {
-                            log::error!("[byop] error bytes[{hex_start}..{hex_end}] hex={slice:02x?}");
-                        }
-                    }
                     yield Err(Arc::new(AIApiError::Other(anyhow::anyhow!(
                         "BYOP stream error: {mapped}"
                     ))));
