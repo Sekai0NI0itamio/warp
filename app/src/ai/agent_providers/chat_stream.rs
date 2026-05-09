@@ -860,8 +860,8 @@ fn build_chat_request(
     //   anthropic.cacheControl / openaiCompatible.cache_control / bedrock.cachePoint
     //   等多 SDK 兼容标记。AI SDK 各 provider 实现读对应 key,无关 key 自动忽略。
     // - 我们走 rust-genai,Anthropic adapter 支持 per-message `cache_control`,
-    //   OpenAI / OpenAiResp adapter 仅认 `ChatOptions` 级别的 prompt_cache_key /
-    //   cache_control,DeepSeek / Gemini / Ollama 服务端隐式缓存,无需 client opt-in。
+    //   OpenAI / OpenAiResp / DeepSeek adapter 仅认 `ChatOptions` 级别的
+    //   prompt_cache_key / cache_control,Gemini / Ollama 服务端隐式缓存。
     // - 故在此只对 Anthropic 路径"per-message"打标:把 system 文本作为
     //   ChatRole::System message 推到 messages 头部并打 Ephemeral,再把末尾两条
     //   非 system message 也打 Ephemeral(对应 opencode 的 system+last 2 模式)。
@@ -1775,10 +1775,12 @@ fn build_chat_options(
     //   - cache_control = Ephemeral → 序列化为 `prompt_cache_retention: "in_memory"`
     //     (genai `adapter_shared.rs:199`),触发服务端短 TTL 缓存。
     // Anthropic 走 per-message cache_control(在 build_chat_request 里),不在此处。
-    // DeepSeek / Gemini / Ollama 服务端隐式缓存,跳过。
+    // Gemini / Ollama 服务端隐式缓存,跳过。
     if matches!(
         api_type,
-        AgentProviderApiType::OpenAi | AgentProviderApiType::OpenAiResp
+        AgentProviderApiType::OpenAi
+            | AgentProviderApiType::OpenAiResp
+            | AgentProviderApiType::DeepSeek
     ) {
         if let Some(cid) = conversation_id {
             if !cid.is_empty() {
@@ -3705,6 +3707,46 @@ mod dashscope_thinking_tests {
             DASHSCOPE_CN,
             "deepseek-r1",
             R::High
+        ));
+    }
+}
+
+#[cfg(test)]
+mod chat_options_cache_tests {
+    use super::*;
+    use crate::settings::ReasoningEffortSetting as R;
+
+    #[test]
+    fn deepseek_uses_request_cache_with_conversation_key() {
+        let opts = build_chat_options(
+            AgentProviderApiType::DeepSeek,
+            "https://api.deepseek.com/v1/",
+            "deepseek-chat",
+            R::Auto,
+            vec![],
+            Some("conv-123"),
+        );
+        assert_eq!(opts.prompt_cache_key(), Some("conv-123"));
+        assert!(matches!(
+            opts.cache_control(),
+            Some(&CacheControl::Ephemeral)
+        ));
+    }
+
+    #[test]
+    fn deepseek_uses_request_cache_without_conversation_key() {
+        let opts = build_chat_options(
+            AgentProviderApiType::DeepSeek,
+            "https://api.deepseek.com/v1/",
+            "deepseek-chat",
+            R::Auto,
+            vec![],
+            None,
+        );
+        assert_eq!(opts.prompt_cache_key(), None);
+        assert!(matches!(
+            opts.cache_control(),
+            Some(&CacheControl::Ephemeral)
         ));
     }
 }
