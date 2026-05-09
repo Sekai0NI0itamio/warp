@@ -16,7 +16,7 @@
 //! 调用方静默 no-op。
 
 use anyhow::Context as _;
-use genai::chat::{ChatMessage, ChatOptions, ChatRequest};
+use genai::chat::{CacheControl, ChatMessage, ChatOptions, ChatRequest};
 use warpui::{AppContext, EntityId, SingletonEntity as _};
 
 use super::chat_stream;
@@ -81,6 +81,9 @@ pub async fn byop_oneshot_completion(
     let mut chat_opts = ChatOptions::default()
         .with_capture_content(true)
         .with_capture_usage(true);
+    if matches!(cfg.api_type, AgentProviderApiType::DeepSeek) {
+        chat_opts = chat_opts.with_cache_control(CacheControl::Ephemeral);
+    }
     if let Some(t) = opts.temperature {
         chat_opts = chat_opts.with_temperature(t.into());
     }
