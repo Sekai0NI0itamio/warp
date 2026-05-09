@@ -642,9 +642,9 @@ if [[ $READ_PASSWORDS_FROM_ENV != true ]]; then
 fi
 
 # App-only validation builds intentionally skip notarization setup to minimize
-# CI time; release/distribution builds should keep BUILD_DMG=true.
+# CI time. Do not use BUILD_DMG=false for release/distribution artifacts.
 SKIP_NOTARIZATION=false
-if [[ "$ARTIFACT" = app && "$BUILD_DMG" = false ]]; then
+if [[ "$CODESIGN" = true && "$ARTIFACT" = app && "$BUILD_DMG" = false ]]; then
   SKIP_NOTARIZATION=true
 fi
 
