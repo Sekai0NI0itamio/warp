@@ -1660,6 +1660,20 @@ fn normalize_endpoint_url(api_type: AgentProviderApiType, base_url: &str) -> Str
     format!("{stripped}/")
 }
 
+pub(super) fn is_deepseek_official_endpoint(base_url: &str) -> bool {
+    let endpoint = normalize_endpoint_url(AgentProviderApiType::DeepSeek, base_url);
+    let Ok(parsed) = url::Url::parse(&endpoint) else {
+        return false;
+    };
+    if parsed.scheme() != "https" {
+        return false;
+    }
+    let Some(host) = parsed.host_str() else {
+        return false;
+    };
+    host == "api.deepseek.com" || host.ends_with(".deepseek.com")
+}
+
 /// 构造 genai Client。每次请求新建(开销低 — Client 内部只是 reqwest::Client + adapter 表)。
 /// `ServiceTargetResolver` capture 当前请求的 endpoint/key/api_type 后,把每次 exec_chat_stream
 /// 都强制路由到指定 AdapterKind,完全绕过 genai 默认的"按模型名识别"。
@@ -1771,8 +1785,8 @@ fn build_chat_options(
     //   - prompt_cache_key:OpenAI 把同 key 的请求路由到同一缓存分片,提升命中
     //     (`prompt_cache_key` field,见 `adapter_shared.rs:194` /
     //     `openai_resp/adapter_impl.rs:238`);用 conversation_id 作为稳定 key。
-    //   - cache_control = Ephemeral → 序列化为 `prompt_cache_retention: "in_memory"`
-    //     (genai `adapter_shared.rs:199`),触发服务端短 TTL 缓存。
+    //   - OpenAI/OpenAIResp 继续使用 `cache_control = Ephemeral`(in_memory)。
+    //   - DeepSeek 不再强制 `cache_control`，避免把服务端默认磁盘缓存降级成短 TTL。
     // Anthropic 走 per-message cache_control(在 build_chat_request 里),不在此处。
     // Gemini / Ollama 服务端隐式缓存,跳过。
     if matches!(
@@ -1786,7 +1800,12 @@ fn build_chat_options(
                 opts = opts.with_prompt_cache_key(cid.to_owned());
             }
         }
-        opts = opts.with_cache_control(CacheControl::Ephemeral);
+        if matches!(
+            api_type,
+            AgentProviderApiType::OpenAi | AgentProviderApiType::OpenAiResp
+        ) {
+            opts = opts.with_cache_control(CacheControl::Ephemeral);
+        }
     }
 
     // 仅在用户显式选了非 Auto 档位 **且** 模型支持 reasoning 时才注入。
@@ -1911,6 +1930,13 @@ pub async fn generate_byop_output(
     context_window: Option<u32>,
     _cancellation_rx: futures::channel::oneshot::Receiver<()>,
 ) -> Result<ResponseStream, ConvertToAPITypeError> {
+    if matches!(api_type, AgentProviderApiType::DeepSeek)
+        && !is_deepseek_official_endpoint(&base_url)
+    {
+        return Err(ConvertToAPITypeError::Other(anyhow::anyhow!(
+            "DeepSeek API key will only be sent to official DeepSeek HTTPS endpoints (*.deepseek.com)"
+        )));
+    }
     let force_echo_reasoning = super::reasoning::model_requires_reasoning_echo(api_type, &model_id);
     let chat_req = build_chat_request(&params, force_echo_reasoning, api_type, &model_id);
     let conversation_id = params
@@ -3726,10 +3752,7 @@ mod chat_options_cache_tests {
             Some("conv-123"),
         );
         assert_eq!(opts.prompt_cache_key(), Some("conv-123"));
-        assert!(matches!(
-            opts.cache_control(),
-            Some(&CacheControl::Ephemeral)
-        ));
+        assert_eq!(opts.cache_control(), None);
     }
 
     #[test]
@@ -3743,9 +3766,33 @@ mod chat_options_cache_tests {
             None,
         );
         assert_eq!(opts.prompt_cache_key(), None);
-        assert!(matches!(
-            opts.cache_control(),
-            Some(&CacheControl::Ephemeral)
+        assert_eq!(opts.cache_control(), None);
+    }
+}
+
+#[cfg(test)]
+mod deepseek_endpoint_tests {
+    use super::is_deepseek_official_endpoint;
+
+    #[test]
+    fn deepseek_official_host_allowed() {
+        assert!(is_deepseek_official_endpoint("https://api.deepseek.com/v1/"));
+    }
+
+    #[test]
+    fn deepseek_subdomain_allowed() {
+        assert!(is_deepseek_official_endpoint(
+            "https://gateway.deepseek.com/v1/"
         ));
+    }
+
+    #[test]
+    fn deepseek_non_https_rejected() {
+        assert!(!is_deepseek_official_endpoint("http://api.deepseek.com/v1/"));
+    }
+
+    #[test]
+    fn deepseek_non_official_host_rejected() {
+        assert!(!is_deepseek_official_endpoint("https://example.com/v1/"));
     }
 }

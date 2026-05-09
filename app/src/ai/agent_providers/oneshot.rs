@@ -15,8 +15,8 @@
 //! 解码失败(没配 BYOP / 模型不在 BYOP 编码空间)→ 返回 `None`,
 //! 调用方静默 no-op。
 
-use anyhow::Context as _;
-use genai::chat::{CacheControl, ChatMessage, ChatOptions, ChatRequest};
+use anyhow::{bail, Context as _};
+use genai::chat::{ChatMessage, ChatOptions, ChatRequest};
 use warpui::{AppContext, EntityId, SingletonEntity as _};
 
 use super::chat_stream;
@@ -76,14 +76,18 @@ pub async fn byop_oneshot_completion(
     user: &str,
     opts: &OneshotOptions,
 ) -> anyhow::Result<String> {
+    if matches!(cfg.api_type, AgentProviderApiType::DeepSeek)
+        && !chat_stream::is_deepseek_official_endpoint(&cfg.base_url)
+    {
+        bail!(
+            "DeepSeek API key will only be sent to official DeepSeek HTTPS endpoints (*.deepseek.com)"
+        );
+    }
     let client = chat_stream::build_client(cfg.api_type, cfg.base_url.clone(), cfg.api_key.clone());
 
     let mut chat_opts = ChatOptions::default()
         .with_capture_content(true)
         .with_capture_usage(true);
-    if matches!(cfg.api_type, AgentProviderApiType::DeepSeek) {
-        chat_opts = chat_opts.with_cache_control(CacheControl::Ephemeral);
-    }
     if let Some(t) = opts.temperature {
         chat_opts = chat_opts.with_temperature(t.into());
     }
