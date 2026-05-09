@@ -641,14 +641,14 @@ if [[ $READ_PASSWORDS_FROM_ENV != true ]]; then
   CODESIGN=false
 fi
 
-# App-only validation builds intentionally skip DMG creation and notarization to
-# minimize CI time; release/distribution builds should keep BUILD_DMG=true.
-SHOULD_NOTARIZE=true
+# App-only validation builds intentionally skip notarization setup to minimize
+# CI time; release/distribution builds should keep BUILD_DMG=true.
+SKIP_NOTARIZATION=false
 if [[ "$ARTIFACT" = app && "$BUILD_DMG" = false ]]; then
-  SHOULD_NOTARIZE=false
+  SKIP_NOTARIZATION=true
 fi
 
-if [[ "$CODESIGN" = true && "$SHOULD_NOTARIZE" = true ]]; then
+if [[ "$CODESIGN" = true && "$SKIP_NOTARIZATION" = false ]]; then
   # TODO - does this need to change per user?  Seems like it's tied to the WARP_NOTARIZATION_PASSWORD password.
   APPLE_TEAM_ID="2BBY89MBSN"
   CODESIGN_KEYCHAIN_NAME="warp-codesign-keychain"
