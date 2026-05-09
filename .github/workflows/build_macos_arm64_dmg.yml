@@ -29,7 +29,7 @@ env:
   CHANNEL: oss
 
 jobs:
-  build_macos_arm64:
+  build_macos_arm64_artifact:
     name: Build OpenWarp ${{ inputs.artifact_type }} (arm64)
     runs-on: macos-26
     timeout-minutes: 180
@@ -80,14 +80,21 @@ jobs:
           fi
           script/bundle --channel "$CHANNEL" --arch aarch64 --dmg-name-suffix arm64 "${EXTRA_ARGS[@]}"
 
-      - name: Upload build artifact
+      - name: Upload app artifact
+        if: ${{ inputs.artifact_type == 'app' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        env:
-          ARTIFACT_NAME: ${{ inputs.artifact_type == 'app' && 'openwarp-macos-arm64-app' || 'openwarp-macos-arm64-dmg' }}
-          ARTIFACT_PATH: ${{ inputs.artifact_type == 'app' && steps.bundle_app.outputs.app_path || steps.bundle_app.outputs.dmg_path }}
         with:
-          name: ${{ env.ARTIFACT_NAME }}
-          path: ${{ env.ARTIFACT_PATH }}
+          name: openwarp-macos-arm64-app
+          path: ${{ steps.bundle_app.outputs.app_path }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload DMG artifact
+        if: ${{ inputs.artifact_type == 'dmg' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: openwarp-macos-arm64-dmg
+          path: ${{ steps.bundle_app.outputs.dmg_path }}
           if-no-files-found: error
           retention-days: 14
 

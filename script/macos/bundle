@@ -642,7 +642,7 @@ if [[ $READ_PASSWORDS_FROM_ENV != true ]]; then
 fi
 
 SHOULD_NOTARIZE=true
-if [[ "$ARTIFACT" = app && "$BUILD_DMG" = false ]]; then
+if [[ "$ARTIFACT" == app && "$BUILD_DMG" == false ]]; then
   SHOULD_NOTARIZE=false
 fi
 
