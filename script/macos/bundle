@@ -642,11 +642,11 @@ if [[ $READ_PASSWORDS_FROM_ENV != true ]]; then
 fi
 
 SHOULD_NOTARIZE=true
-if [[ "$ARTIFACT" == app && "$BUILD_DMG" == false ]]; then
+if [[ "$ARTIFACT" = app && "$BUILD_DMG" = false ]]; then
   SHOULD_NOTARIZE=false
 fi
 
-if [[ $CODESIGN = true && "$SHOULD_NOTARIZE" = true ]]; then
+if [[ "$CODESIGN" = true && "$SHOULD_NOTARIZE" = true ]]; then
   # TODO - does this need to change per user?  Seems like it's tied to the WARP_NOTARIZATION_PASSWORD password.
   APPLE_TEAM_ID="2BBY89MBSN"
   CODESIGN_KEYCHAIN_NAME="warp-codesign-keychain"
