@@ -105,6 +105,7 @@ function relpath() {
 # Defaults for command-line flags.
 UNIVERSAL_BINARY=true
 BUILD_BINARY=true
+BUILD_DMG=true
 TARGET_ARCH=""
 DMG_NAME_SUFFIX=""
 # By default we build dev bundles.
@@ -137,6 +138,12 @@ while (( "$#" )); do
     --skip-build)
       echo "Skipping binary build step."
       BUILD_BINARY=false
+      shift
+      ;;
+    # Skip DMG creation and only output the .app bundle
+    --skip-dmg)
+      echo "Skipping DMG creation step."
+      BUILD_DMG=false
       shift
       ;;
     # Skip code signing process
@@ -634,7 +641,7 @@ if [[ $READ_PASSWORDS_FROM_ENV != true ]]; then
   CODESIGN=false
 fi
 
-if [[ $CODESIGN = true ]]; then
+if [[ $CODESIGN = true && ! ( "$ARTIFACT" = app && "$BUILD_DMG" = false ) ]]; then
   # TODO - does this need to change per user?  Seems like it's tied to the WARP_NOTARIZATION_PASSWORD password.
   APPLE_TEAM_ID="2BBY89MBSN"
   CODESIGN_KEYCHAIN_NAME="warp-codesign-keychain"
@@ -720,7 +727,7 @@ fi
 ## Step 4: Create DMG ##
 ########################
 
-if [[ "$ARTIFACT" = app ]]; then
+if [[ "$ARTIFACT" = app && "$BUILD_DMG" = true ]]; then
   function create_warp_dmg() {
     echo "Creating $DMG_DIR/$DMG_NAME..."
     rm "$DMG_DIR/$DMG_NAME" || true
@@ -817,9 +824,12 @@ fi
 #######################################
 
 if [[ "$ARTIFACT" = app ]]; then
-  echo "Copying dmg and app to $OUT_DIR"
+  echo "Copying app to $OUT_DIR"
   cp -R "$BUNDLE_DIR/$WARP_APP_NAME.app" "$OUT_DIR"
-  cp "$DMG_DIR/$DMG_NAME" "$OUT_DIR/$FINAL_DMG_NAME"
+  if [[ "$BUILD_DMG" = true ]]; then
+    echo "Copying dmg to $OUT_DIR"
+    cp "$DMG_DIR/$DMG_NAME" "$OUT_DIR/$FINAL_DMG_NAME"
+  fi
 fi
 
 # If this is being run within a GitHub action, set an output variable with the
@@ -850,6 +860,10 @@ if [ "${GITHUB_ACTIONS}" == "true" ]; then
   echo "dock_tile_plugin_dir=$DOCK_TILE_PLUGIN_DIR" >> "$GITHUB_OUTPUT"
   echo "frameworks_dir=app/frameworks/${FRAMEWORK_OVERRIDE:-default}" >> "$GITHUB_OUTPUT"
   
+  if [[ "$ARTIFACT" = app ]]; then
+    echo "app_path=$OUT_DIR/$WARP_APP_NAME.app" >> "$GITHUB_OUTPUT"
+  fi
+
   # For full bundles, output DMG information
   if [[ -f "$OUT_DIR/$FINAL_DMG_NAME" ]]; then
     echo "dmg_name=$FINAL_DMG_NAME" >> "$GITHUB_OUTPUT"
