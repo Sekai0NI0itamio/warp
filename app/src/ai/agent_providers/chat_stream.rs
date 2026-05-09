@@ -1671,7 +1671,7 @@ pub(super) fn is_deepseek_official_endpoint(base_url: &str) -> bool {
     let Some(host) = parsed.host_str() else {
         return false;
     };
-    host == "api.deepseek.com" || host.ends_with(".deepseek.com")
+    matches!(host, "api.deepseek.com")
 }
 
 /// 构造 genai Client。每次请求新建(开销低 — Client 内部只是 reqwest::Client + adapter 表)。
@@ -1934,7 +1934,7 @@ pub async fn generate_byop_output(
         && !is_deepseek_official_endpoint(&base_url)
     {
         return Err(ConvertToAPITypeError::Other(anyhow::anyhow!(
-            "DeepSeek API key will only be sent to official DeepSeek HTTPS endpoints (*.deepseek.com)"
+            "DeepSeek API key will only be sent to https://api.deepseek.com"
         )));
     }
     let force_echo_reasoning = super::reasoning::model_requires_reasoning_echo(api_type, &model_id);
@@ -3780,8 +3780,8 @@ mod deepseek_endpoint_tests {
     }
 
     #[test]
-    fn deepseek_subdomain_allowed() {
-        assert!(is_deepseek_official_endpoint(
+    fn deepseek_subdomain_rejected() {
+        assert!(!is_deepseek_official_endpoint(
             "https://gateway.deepseek.com/v1/"
         ));
     }
