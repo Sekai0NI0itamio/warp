@@ -1667,7 +1667,7 @@ fn normalize_endpoint_url(api_type: AgentProviderApiType, base_url: &str) -> Str
 pub(super) fn is_deepseek_official_endpoint(base_url: &str) -> bool {
     let endpoint = normalize_endpoint_url(AgentProviderApiType::DeepSeek, base_url);
     let Ok(parsed) = url::Url::parse(&endpoint) else {
-        log::warn!("[byop] invalid DeepSeek endpoint URL: {endpoint}");
+        log::warn!("[byop] invalid DeepSeek endpoint URL configured");
         return false;
     };
     if parsed.scheme() != "https" {
@@ -1677,6 +1677,7 @@ pub(super) fn is_deepseek_official_endpoint(base_url: &str) -> bool {
         return false;
     };
     // 安全策略:仅允许官方固定主机,避免把 DeepSeek key 发送到任意自定义/子域网关。
+    // 这里显式拒绝任何 wildcard/子域匹配(包括 *.api.deepseek.com)。
     matches!(host, DEEPSEEK_OFFICIAL_HOST)
 }
 
@@ -1791,7 +1792,8 @@ fn build_chat_options(
     //   - prompt_cache_key:OpenAI 把同 key 的请求路由到同一缓存分片,提升命中
     //     (`prompt_cache_key` field,见 `adapter_shared.rs:194` /
     //     `openai_resp/adapter_impl.rs:238`);用 conversation_id 作为稳定 key。
-    //   - OpenAI/OpenAIResp 继续使用 `cache_control = Ephemeral`(in_memory)。
+    //   - OpenAI/OpenAIResp 继续使用 `cache_control = Ephemeral`(in_memory),
+    //     对齐现有 OpenAI 兼容链路的短时缓存语义。
     //   - DeepSeek 不再强制 `cache_control`，保留服务端默认持久化缓存(磁盘/较长 TTL)路径，
     //     避免被 `in_memory` 策略降级导致缓存命中率下降。
     // Anthropic 走 per-message cache_control(在 build_chat_request 里),不在此处。
